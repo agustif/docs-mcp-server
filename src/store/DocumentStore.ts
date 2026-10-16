@@ -9,6 +9,7 @@ import { logger } from "../utils/logger";
 import { MimeTypeUtils } from "../utils/mimeTypeUtils";
 import { compareVersionsDescending } from "../utils/version";
 import { applyMigrations } from "./applyMigrations";
+import { applyConnectionPragmas } from "./connectionPragmas";
 import { EmbeddingConfig, type EmbeddingModelConfig } from "./embeddings/EmbeddingConfig";
 import {
   areCredentialsAvailable,
@@ -284,6 +285,13 @@ export class DocumentStore {
 
     // Only establish database connection in constructor
     this.db = new Database(dbPath);
+
+    // Per-connection production settings (WAL, busy timeout, ...). busy_timeout
+    // especially must be set here: it resets on every new connection, and
+    // without it concurrent writers fail fast with SQLITE_BUSY instead of
+    // waiting. Fail fast if pragmas cannot be applied — a store without them
+    // silently reintroduces the lock failures.
+    applyConnectionPragmas(this.db);
 
     // Store embedding config for later initialization
     this.embeddingConfig = this.resolveEmbeddingConfig(appConfig.app.embeddingModel);

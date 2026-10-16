@@ -3,6 +3,7 @@ import path from "node:path";
 import type { Database } from "better-sqlite3";
 import { logger } from "../utils/logger";
 import { getProjectRoot } from "../utils/paths";
+import { applyConnectionPragmas } from "./connectionPragmas";
 import { StoreError } from "./errors";
 
 // Construct the absolute path to the migrations directory using the project root
@@ -12,7 +13,6 @@ const MIGRATION_STEP_MARKER = /^\s*--\s*@migration-step\s+(.+?)\s*$/;
 const VECTOR_PARTITION_MIGRATION = "014-rebuild-vector-partition-keys.sql";
 const DEFAULT_VECTOR_DIMENSION = 1536;
 const VECTOR_DIMENSION_TOKEN = "__DOCUMENTS_VEC_DIMENSION__";
-const WAL_SIZE_LIMIT_BYTES = 64 * 1024 * 1024;
 
 interface MigrationStep {
   label: string;
@@ -296,27 +296,10 @@ export async function applyMigrations(
     }
   }
 
-  // Configure production-ready settings after migrations
+  // Configure production-ready settings after migrations (shared helper keeps
+  // the migration connection consistent with every DocumentStore connection).
   try {
-    // Enable WAL mode for better concurrency (allows readers while writing)
-    db.pragma("journal_mode = WAL");
-
-    // Configure WAL autocheckpoint to prevent unbounded growth
-    db.pragma("wal_autocheckpoint = 1000"); // Checkpoint every 1000 pages (~4MB)
-
-    // SQLite reuses the WAL file after a checkpoint but never shrinks it, so one
-    // large write (a bulk scrape, a migration, VACUUM) would leave it at its peak
-    // size until the last connection closes. Trim it back once the WAL resets.
-    db.pragma(`journal_size_limit = ${WAL_SIZE_LIMIT_BYTES}`);
-
-    // Set busy timeout for better handling of concurrent access
-    db.pragma("busy_timeout = 30000"); // 30 seconds
-
-    // Enable foreign key constraints for data integrity
-    db.pragma("foreign_keys = ON");
-
-    // Set synchronous to NORMAL for good balance of safety and performance
-    db.pragma("synchronous = NORMAL");
+    applyConnectionPragmas(db);
 
     logger.debug(
       "Applied production database configuration (WAL mode, autocheckpoint, WAL size limit, foreign keys, busy timeout)",
